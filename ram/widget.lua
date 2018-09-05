@@ -8,10 +8,36 @@ local ram_widget = {}
 local function worker(args)
   -- Args
   local args = args or {}
+  local ICON_DIR = awful.util.getdir("config").."/ram/icons/"
 
   -- Widgets
-  local widget = wibox.container.background()
   local ram = wibox.widget.textbox()
+  local ram_image = wibox.widget {
+    image = ICON_DIR.."ram_128.png",
+    resize = true,
+    forced_height = 18,
+    paddings = 2,
+    widget = wibox.widget.imagebox
+  }
+  local ram_image_margin = wibox.widget {
+    ram_image,
+    right = 2,
+    widget = wibox.container.margin
+  }
+  local background = wibox.widget {
+    ram_image_margin,
+    ram,
+    left = 2,
+    right = 2,
+    layout = wibox.layout.fixed.horizontal,
+    widget = wibox.container.background
+  }
+  local widget = wibox.widget {
+    background,
+    left = 2,
+    right = 2,
+    widget = wibox.container.margin
+  }
 
   -- Settings
   local timeout = args.timeout or 5
@@ -26,6 +52,7 @@ local function worker(args)
   local total_swap = 0
   local used_swap = 0
   local free_swap = 0
+
   local function get_percentage(value)
     if (total + total_swap) == 0 then
       return '0%'
@@ -55,14 +82,10 @@ local function worker(args)
     return msg
   end
 
-  ram:set_text("Ram: ")
-  widget:set_widget(ram)
-
   local function ram_update()
     awful.spawn.easy_async("bash -c \"free | grep -z Mem.*Swap.*\"", function(stdout, stderr, reason, exit_code)
       total, used, free, shared, buff_cache, available, total_swap, used_swap, free_swap = stdout:match('(%d+)%s*(%d+)%s*(%d+)%s*(%d+)%s*(%d+)%s*(%d+)%s*Swap:%s*(%d+)%s*(%d+)%s*(%d+)')
-      ram:set_text("Ram: "..(get_percentage(used + used_swap) or "N/A"))
-      widget:set_widget(ram)
+      ram:set_text((get_percentage(used + used_swap) or "N/A"))
     end)
 
     return true
