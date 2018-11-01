@@ -11,7 +11,7 @@ local function worker(args)
   local args = args or {}
 
   -- Settings
-  local timeout = args.timeout or 10
+  local timeout = args.timeout or 30
   local popup_position = args.popup_position or naughty.config.defaults.position
   local font = args.font or "Play 5"
 
@@ -45,17 +45,33 @@ local function worker(args)
   local battery_graph = wibox.widget {
     max_value = 100,
     min_value = 0,
+    forced_width = 200,
     step_width = 3,
     step_spacing = 1,
+    step_shape = function(cr, width, height)
+      cr:set_source(gears.color(beautiful.widget_green))
+      return gears.shape.rectangle(cr, width, height)
+    end,
     background_color = "#ffffff11",
-    color = beautiful.widget_main_color,
     widget = wibox.widget.graph,
+  }
+
+  local battery_graph_mirrored = wibox.container.mirror(battery_graph, { horizontal = true })
+
+  local battery_detail_text = wibox.widget.textbox()
+  battery_detail_text:set_text("")
+  battery_detail_text:set_font(font)
+
+  local battery_detail_container = wibox.widget {
+    battery_detail_text,
+    battery_graph_mirrored,
+    layout = wibox.layout.align.vertical,
   }
 
   -- wibox battery detail
   local battery_detail = wibox {
     height = 200,
-    width = 200,
+    width = 210,
     ontop = true,
     screen = mouse.screen,
     expand = true,
@@ -64,7 +80,7 @@ local function worker(args)
   }
 
   battery_detail:setup {
-    battery_graph,
+    battery_detail_container,
     left = 5,
     right = 5,
     top = 5,
@@ -87,17 +103,11 @@ local function worker(args)
     records_count = 0,
     records_cap = 50,
     records_pop = function(self)
-      local min_time = os.time() + 1000 -- start with a larger time
-      for time, _ in pairs(self.records) do
-        if time < min_time then
-          min_time = time
-        end
-      end
-      self.records[min_time] = nil
+      table.remove(self.records, 1)
       self.records_count = self.records_count - 1
     end,
-    records_push = function(self, time, record)
-      self.records[time] = record
+    records_push = function(self, record)
+      table.insert(self.records, record)
       self.records_count = self.records_count + 1
       if self.records_count > self.records_cap then
         self.records_pop(self)
@@ -107,6 +117,17 @@ local function worker(args)
   -- Notification Object
   local notification = nil
 
+  local function parse_acpi_output(output)
+    local info = {}
+    -- Get info for each battery device
+    for s in output:gmatch("[^\r\n]+") do
+      local name, status, charge_str, time, _ = string.match(s, '(.+): (%w+), (%d?%d?%d)%%, (%d+:%d+:%d+).*')
+      table.insert(info, { name = name, status = status, charge = tonumber(charge_str), time = time })
+    end
+
+    return info
+  end
+
   local function text_grabber()
     local msg = ""
     local font = beautiful.font
@@ -114,30 +135,33 @@ local function worker(args)
     -- Get the current battery info
     f = io.popen("acpi")
     for line in f:lines() do
-      msg = msg..
-            "<span font_desc=\""..font.."\">"..
-            line.."</span>\n"
+      raw_acpi_text = raw_acpi_text..line
     end
     f:close()
 
-    -- -- Display the number of stored previous records
-    -- msg = msg.."<span font_desc=\""..font.."\">"..
-    --       "<b>Records: "..batt_info.records_count.."</b>"..
-    --       "</span>\n"
+    -- Parse the battery info string
+    local info = parse_acpi_output(raw_acpi_text)
 
-    -- -- Display each record info
-    -- for _, info in pairs(batt_info.records) do
-    --   msg = msg.."<span font_desc=\""..font.."\">"..
-    --         os.date("%T %Z", info.time)..": "..info.charge_avg.."% "..info.status..
-    --         "</span>\n"
-    -- end
+    -- Craft Message Header
+    msg = msg.."<span font_desc=\""..font.."\" size=\"large\"><b>Battery Status</b></span>"
 
+    -- Craft Battery Info Sections
+    for _, battery in ipairs(info) do
+      local time_label = " remaining"
+      if status == 'Charging' then
+        time_label = " until charged"
+      end
+      msg = msg.."\n"..
+            "<span font_desc=\""..font.."\">"..battery.name.."</span>\n"..
+            "<span font_desc=\""..font.."\">├Charge:\t"..battery.charge.."%</span>\n"..
+            "<span font_desc=\""..font.."\">├Status:\t"..battery.status.."</span>\n"..
+            "<span font_desc=\""..font.."\">└Time:\t"..battery.time..time_label.."</span>"
+    end
     return msg
   end
 
   local function battery_update()
     awful.spawn.easy_async("bash -c \"acpi\"", function(stdout, stderr, reason, exit_code)
-      local info = {}
       local time
       local charge = 0
       local charge_sum = 0
@@ -146,13 +170,10 @@ local function worker(args)
       local status
 
       -- Get info for each battery device
-      for s in stdout:gmatch("[^\r\n]+") do
-        local name, status, charge_str, time_left, _ = string.match(s, '(.+): (%w+), (%d?%d?%d)%%, (%d+:%d+:%d+).*')
-        info[name] = { status = status, charge = tonumber(charge_str), time_left = time_left }
-      end
+      local info = parse_acpi_output(stdout)
 
       -- Get an average battery charge
-      for name, record in pairs(info) do
+      for _, record in ipairs(info) do
         if record.charge >= charge then
           charge = record.charge -- use most charged battery status
           status = record.status  -- this is arbitrary and maybe another metric should be used
@@ -165,7 +186,7 @@ local function worker(args)
       time = os.time()
 
       -- store battery info
-      batt_info.records_push(batt_info, time, {
+      batt_info.records_push(batt_info, {
         time = time,
         status = status,
         charge_avg = charge,
@@ -225,21 +246,14 @@ local function worker(args)
   function widget:show(t_out)
     widget:hide()
 
-    notification = naughty.notify({
-      preset = fs_notification_preset,
-      text = text_grabber(),
-      title = "Battery Status",
-      timeout = t_out,
-      screen = mouse.screen,
-      position = popup_position,
-      hover_timeout = 0.5
-    })
+    local msg = text_grabber()
 
-    awful.placement.bottom_right(battery_detail, { margins = { bottom = 25, right = 10 } })
+    awful.placement.top_right(battery_detail, { margins = { top = 25, right = 5 } })
     battery_graph:clear()
-    for _, record in pairs(batt_info.records) do
+    for _, record in ipairs(batt_info.records) do
       battery_graph:add_value(record.charge_avg)
     end
+    battery_detail_text:set_markup_silently(msg)
     battery_detail.visible = true
   end
 
