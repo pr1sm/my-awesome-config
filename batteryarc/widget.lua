@@ -121,7 +121,7 @@ local function worker(args)
     local info = {}
     -- Get info for each battery device
     for s in output:gmatch("[^\r\n]+") do
-      local name, status, charge_str, time, _ = string.match(s, '(.+): (%w+), (%d?%d?%d)%%, (%d+:%d+:%d+).*')
+      local name, status, charge_str, time, _ = string.match(s, '(.+): (%w+), (%d?%d?%d)%%, (%d*:?%d*:?%d*).*')
       table.insert(info, { name = name, status = status, charge = tonumber(charge_str), time = time })
     end
 
@@ -147,15 +147,22 @@ local function worker(args)
 
     -- Craft Battery Info Sections
     for _, battery in ipairs(info) do
-      local time_label = " remaining"
-      if status == 'Charging' then
-        time_label = " until charged"
+      local time_label = battery.time.." remaining"
+      local status = battery.status
+      if battery.charge == 100 then
+        time_label = "N/A"
+        status = "Charged"
+        if battery.status == 'Charging' then
+          status = status.." (on AC)"
+        end
+      elseif battery.status == 'Charging' then
+        time_label = battery.time.." until charged"
       end
       msg = msg.."\n"..
             "<span font_desc=\""..font.."\">"..battery.name.."</span>\n"..
             "<span font_desc=\""..font.."\">├Charge:\t"..battery.charge.."%</span>\n"..
-            "<span font_desc=\""..font.."\">├Status:\t"..battery.status.."</span>\n"..
-            "<span font_desc=\""..font.."\">└Time:\t"..battery.time..time_label.."</span>"
+            "<span font_desc=\""..font.."\">├Status:\t"..status.."</span>\n"..
+            "<span font_desc=\""..font.."\">└Time:\t"..time_label.."</span>"
     end
     return msg
   end
